@@ -1,0 +1,666 @@
+#ifndef SHADER_COMMON_H_INCLUDED
+#define SHADER_COMMON_H_INCLUDED
+
+// Xerenge VR: the multiview (stereo) variant of shader_common.h (made from it by stereo_header.py). Each draw
+// renders both eyes (SV_ViewID); 2D textures are arrays, an eye a layer where the texture has two (a copy of the
+// stereo scene), the one layer for both where it has one. Perspective geometry moves by the eye's clip shift
+// (shared bytes 320 / 324: left, right).
+#define XERENGE_STEREO 1
+static uint g_ViewId = 0;
+#ifdef __spirv__
+#define XERENGE_VIEW_ID_PARAM , in uint iViewId : SV_ViewID
+#define XERENGE_VIEW_ID_SET g_ViewId = iViewId;
+#define XERENGE_EYE_SHIFT (g_ViewId != 0 ? asfloat(XENOS_SHARED_UINT(324)) : asfloat(XENOS_SHARED_UINT(320)))
+#else
+#define XERENGE_VIEW_ID_PARAM
+#define XERENGE_VIEW_ID_SET
+#define XERENGE_EYE_SHIFT 0.0
+#endif
+#define XERENGE_VIEW_POSITION(p) if (abs((p).w - 1.0) > (1.0 / 1024.0)) (p).x += XERENGE_EYE_SHIFT;
+
+// Xerenge VR: the view of a multiview (stereo) draw; empty here, set by shader_common_stereo.h.
+#ifndef XERENGE_VIEW_ID_PARAM
+#define XERENGE_VIEW_ID_PARAM
+#define XERENGE_VIEW_ID_SET
+#define XERENGE_VIEW_POSITION(p)
+#endif
+
+#define SPEC_CONSTANT_R11G11B10_NORMAL  (1 << 0)
+#define SPEC_CONSTANT_ALPHA_TEST        (1 << 1)
+// Burnout without bloom: the composite's bloom term from the pixel itself.
+#define SPEC_CONSTANT_BLOOM_IN_PLACE    (1 << 6)
+
+#ifdef UNLEASHED_RECOMP
+    #define SPEC_CONSTANT_BICUBIC_GI_FILTER (1 << 2)
+    #define SPEC_CONSTANT_ALPHA_TO_COVERAGE (1 << 3)
+    #define SPEC_CONSTANT_REVERSE_Z         (1 << 4)
+#endif
+
+#ifdef MARATHON_RECOMP
+    #define SPEC_CONSTANT_CONDITIONAL_RENDERING (1 << 5)
+#endif
+
+#if defined(__air__) || !defined(__cplusplus) || defined(__INTELLISENSE__)
+
+#ifndef __air__
+#define FLT_MIN asfloat(0xff7fffff)
+#define FLT_MAX asfloat(0x7f7fffff)
+#endif
+
+#ifdef __spirv__
+
+// Everything a draw reads comes from one descriptor set (set 0), plain Vulkan
+// 1.0 - most phones' stock drivers have neither buffer device addresses with
+// 64-bit integers nor descriptor indexing. Bindings 0-2: the constants, three
+// uniform buffers bound at the draw's own offsets; 3-6: sixteen 2D, layered
+// and cube textures and sixteen samplers, the draw's sampler slots (below).
+[[vk::binding(0, 0)]] cbuffer XenosVertexConstants { float4 g_VertexShaderConstants[256]; };
+[[vk::binding(1, 0)]] cbuffer XenosPixelConstants { float4 g_PixelShaderConstants[256]; };
+[[vk::binding(2, 0)]] cbuffer XenosSharedConstants { uint4 g_SharedConstants[32]; };
+
+// A 32-bit word of the shared block by its byte offset (a constant). The whole
+// uint4 is loaded and the word picked from the value: an access chain down to
+// one component of a vector in a uniform buffer crashed Mali's shader compiler.
+uint XenosComponent(uint4 v, uint c)
+{
+    return c == 0 ? v.x : (c == 1 ? v.y : (c == 2 ? v.z : v.w));
+}
+#define XENOS_SHARED_UINT(OFFSET) XenosComponent(g_SharedConstants[(OFFSET) / 16], ((OFFSET) % 16) / 4)
+
+#define g_Booleans                  XENOS_SHARED_UINT(256)
+#define g_SwappedTexcoords          XENOS_SHARED_UINT(260)
+#define g_SwappedNormals            XENOS_SHARED_UINT(264)
+#define g_SwappedBinormals          XENOS_SHARED_UINT(268)
+#define g_SwappedTangents           XENOS_SHARED_UINT(272)
+#define g_SwappedBlendWeights       XENOS_SHARED_UINT(276)
+#define g_HalfPixelOffset           asfloat(uint2(XENOS_SHARED_UINT(280), XENOS_SHARED_UINT(284)))
+#define g_ClipPlane                 asfloat(g_SharedConstants[18])
+#define g_ClipPlaneEnabled          (XENOS_SHARED_UINT(304) != 0)
+#define g_AlphaThreshold            asfloat(XENOS_SHARED_UINT(308))
+#define g_conditionalSurveyIndex    XENOS_SHARED_UINT(312)
+#define g_conditionalRenderingIndex XENOS_SHARED_UINT(316)
+
+[[vk::constant_id(0)]] const uint g_SpecConstants = 0;
+
+#define g_SpecConstants() g_SpecConstants
+
+#elif defined(__air__)
+
+#include <metal_stdlib>
+
+using namespace metal;
+
+constant uint G_SPEC_CONSTANTS [[function_constant(0)]];
+constant uint G_SPEC_CONSTANTS_VAL = is_function_constant_defined(G_SPEC_CONSTANTS) ? G_SPEC_CONSTANTS : 0;
+
+uint g_SpecConstants()
+{
+    return G_SPEC_CONSTANTS_VAL;
+}
+
+struct PushConstants
+{
+    ulong VertexShaderConstants;
+    ulong PixelShaderConstants;
+    ulong SharedConstants;
+};
+
+#define g_Booleans (*(reinterpret_cast<device uint*>(g_PushConstants.SharedConstants + 256)))
+#define g_SwappedTexcoords (*(reinterpret_cast<device uint*>(g_PushConstants.SharedConstants + 260)))
+#define g_SwappedNormals (*(reinterpret_cast<device uint*>(g_PushConstants.SharedConstants + 264)))
+#define g_SwappedBinormals (*(reinterpret_cast<device uint*>(g_PushConstants.SharedConstants + 268)))
+#define g_SwappedTangents (*(reinterpret_cast<device uint*>(g_PushConstants.SharedConstants + 272)))
+#define g_SwappedBlendWeights (*(reinterpret_cast<device uint*>(g_PushConstants.SharedConstants + 276)))
+#define g_HalfPixelOffset (*(reinterpret_cast<device float2*>(g_PushConstants.SharedConstants + 280)))
+#define g_ClipPlane (*(reinterpret_cast<device float4*>(g_PushConstants.SharedConstants + 288)))
+#define g_ClipPlaneEnabled (*(reinterpret_cast<device bool*>(g_PushConstants.SharedConstants + 304)))
+#define g_AlphaThreshold (*(reinterpret_cast<device float*>(g_PushConstants.SharedConstants + 308)))
+#define g_conditionalSurveyIndex (*(reinterpret_cast<device uint*>(g_PushConstants.SharedConstants + 312)))
+#define g_conditionalRenderingIndex (*(reinterpret_cast<device uint*>(g_PushConstants.SharedConstants + 316)))
+
+#else
+
+#define DEFINE_SHARED_CONSTANTS() \
+    uint g_Booleans : packoffset(c16.x); \
+    uint g_SwappedTexcoords : packoffset(c16.y); \
+    uint g_SwappedNormals : packoffset(c16.z); \
+    uint g_SwappedBinormals : packoffset(c16.w); \
+    uint g_SwappedTangents : packoffset(c17.x);  \
+    uint g_SwappedBlendWeights : packoffset(c17.y); \
+    float2 g_HalfPixelOffset : packoffset(c17.z); \
+    float4 g_ClipPlane : packoffset(c18.x); \
+    bool g_ClipPlaneEnabled : packoffset(c19.x); \
+    float g_AlphaThreshold : packoffset(c19.y); \
+    uint g_conditionalSurveyIndex : packoffset(c19.z); \
+    uint g_conditionalRenderingIndex : packoffset(c19.w);
+
+uint g_SpecConstants();
+
+#endif
+
+float4 cube(float4 value)
+{
+    float3 src = value.zwx;
+    float3 abs_src = abs(src);
+
+    float sc, tc, ma, id;
+
+    if (abs_src.z >= abs_src.x && abs_src.z >= abs_src.y)
+    {
+        // Z major axis
+        tc = -src.y;
+        sc = src.z < 0.0 ? -src.x : src.x;
+        ma = 2.0 * src.z;
+        id = src.z < 0.0 ? 5.0 : 4.0;
+    }
+    else if (abs_src.y >= abs_src.x)
+    {
+        // Y major axis
+        tc = src.y < 0.0 ? -src.z : src.z;
+        sc = src.x;
+        ma = 2.0 * src.y;
+        id = src.y < 0.0 ? 3.0 : 2.0;
+    }
+    else
+    {
+        // X major axis
+        tc = -src.y;
+        sc = src.x < 0.0 ? src.z : -src.z;
+        ma = 2.0 * src.x;
+        id = src.x < 0.0 ? 1.0 : 0.0;
+    }
+
+    // Return as per Xbox 360 cube instruction output format:
+    // x = t coordinate
+    // y = s coordinate
+    // z = 2 * major axis
+    // w = face ID
+    return float4(tc, sc, ma, id);
+}
+
+float3 cubeDir(float3 texCoord)
+{
+    // Move from 1...2 to -1...1
+    float sc = (texCoord.x * 2.0) - 3.0;
+    float tc = (texCoord.y * 2.0) - 3.0;
+
+    uint face = uint(clamp(texCoord.z, 0.0, 5.0));
+
+    // Split face into axis and sign
+    uint axis = face >> 1;
+    uint neg = face & 1;
+
+    float3 dir;
+
+    switch(axis)
+    {
+    case 0: // X major axis
+        dir.y = -tc;
+        dir.z = neg ? sc : -sc;
+        dir.x = neg ? -1.0 : 1.0;
+        break;
+
+    case 1: // Y major axis
+        dir.x = sc;
+        dir.z = neg ? -tc : tc;
+        dir.y = neg ? -1.0 : 1.0;
+        break;
+
+    default: // Z major axis
+        dir.x = neg ? -sc : sc;
+        dir.y = -tc;
+        dir.z = neg ? -1.0 : 1.0;
+        break;
+    }
+
+    return dir;
+}
+
+#ifdef __air__
+
+struct Texture2DDescriptorHeap
+{
+    texture2d<float> tex;
+};
+
+struct Texture2DArrayDescriptorHeap
+{
+    texture2d_array<float> tex;
+};
+
+struct TextureCubeDescriptorHeap
+{
+    texturecube<float> tex;
+};
+
+struct SamplerDescriptorHeap
+{
+    sampler samp;
+};
+
+struct AtomicUintBuffer
+{
+    device atomic_uint* buffer;
+};
+
+uint2 getTexture2DDimensions(texture2d<float> texture)
+{
+    return uint2(texture.get_width(), texture.get_height());
+}
+
+uint3 getTexture2DArrayDimensions(texture2d_array<float> texture)
+{
+    return uint3(texture.get_width(), texture.get_height(), texture.get_array_size());
+}
+
+float4 tfetch2D(constant Texture2DDescriptorHeap* textureHeap,
+                constant SamplerDescriptorHeap* samplerHeap,
+                uint resourceDescriptorIndex,
+                uint samplerDescriptorIndex,
+                float2 texCoord, float2 offset)
+{
+    texture2d<float> texture = textureHeap[resourceDescriptorIndex].tex;
+    sampler sampler = samplerHeap[samplerDescriptorIndex].samp;
+    return texture.sample(sampler, texCoord + offset / (float2)getTexture2DDimensions(texture));
+}
+
+float4 tfetch2DArray(constant Texture2DArrayDescriptorHeap* textureHeap,
+                     constant SamplerDescriptorHeap* samplerHeap,
+                     uint resourceDescriptorIndex,
+                     uint samplerDescriptorIndex,
+                     float3 texCoord, float3 offset)
+{
+    texture2d_array<float> texture = textureHeap[resourceDescriptorIndex].tex;
+    sampler sampler = samplerHeap[samplerDescriptorIndex].samp;
+    uint3 dimensions = getTexture2DArrayDimensions(texture);
+    return texture.sample(sampler, texCoord.xy + offset.xy / float2(dimensions.xy), uint(texCoord.z * dimensions.z));
+}
+
+float4 tfetchCube(constant TextureCubeDescriptorHeap* textureHeap,
+                  constant SamplerDescriptorHeap* samplerHeap,
+                  uint resourceDescriptorIndex,
+                  uint samplerDescriptorIndex,
+                  float3 texCoord)
+{
+    texturecube<float> texture = textureHeap[resourceDescriptorIndex].tex;
+    sampler sampler = samplerHeap[samplerDescriptorIndex].samp;
+    float3 dir = cubeDir(texCoord);
+    return texture.sample(sampler, dir);
+}
+
+float2 getWeights2D(constant Texture2DDescriptorHeap* textureHeap,
+                    constant SamplerDescriptorHeap* samplerHeap,
+                    uint resourceDescriptorIndex,
+                    uint samplerDescriptorIndex,
+                    float2 texCoord, float2 offset)
+{
+    texture2d<float> texture = textureHeap[resourceDescriptorIndex].tex;
+    return select(fract(texCoord * float2(getTexture2DDimensions(texture)) + offset - 0.5), 0.0, isnan(texCoord));
+}
+
+float3 getWeights2DArray(constant Texture2DArrayDescriptorHeap* textureHeap,
+                         constant SamplerDescriptorHeap* samplerHeap,
+                         uint resourceDescriptorIndex,
+                         uint samplerDescriptorIndex,
+                         float3 texCoord, float3 offset)
+{
+    texture2d_array<float> texture = textureHeap[resourceDescriptorIndex].tex;
+    return select(fract(texCoord * float3(getTexture2DArrayDimensions(texture)) + offset - 0.5), 0.0, isnan(texCoord));
+}
+
+#else
+
+#ifdef __spirv__
+// The draw's sampler slots, indexed by the shader's sampler register (a constant).
+[[vk::binding(3, 0)]] Texture2DArray<float4> g_Texture2DDescriptorHeap[16];
+[[vk::binding(4, 0)]] Texture2DArray<float4> g_Texture2DArrayDescriptorHeap[16];
+[[vk::binding(5, 0)]] TextureCube<float4> g_TextureCubeDescriptorHeap[16];
+[[vk::binding(6, 0)]] SamplerState g_SamplerDescriptorHeap[16];
+#else
+Texture2DArray<float4> g_Texture2DDescriptorHeap[] : register(t0, space0);
+Texture2DArray<float4> g_Texture2DArrayDescriptorHeap[] : register(t0, space1);
+TextureCube<float4> g_TextureCubeDescriptorHeap[] : register(t0, space2);
+SamplerState g_SamplerDescriptorHeap[] : register(s0, space3);
+#endif
+
+#ifdef MARATHON_RECOMP
+RWStructuredBuffer<uint> g_ConditionalSurveyBuffer : register(u0, space4);
+#endif
+
+uint2 getTexture2DDimensions(Texture2DArray<float4> texture)
+{
+    uint3 dimensions;
+    texture.GetDimensions(dimensions.x, dimensions.y, dimensions.z);
+    return dimensions.xy;
+}
+
+uint3 getTexture2DArrayDimensions(Texture2DArray<float4> texture)
+{
+    uint4 dimensions;
+    texture.GetDimensions(0, dimensions.x, dimensions.y, dimensions.z, dimensions.w);
+    return dimensions.xyz;
+}
+
+// The stage comes from the compiler's command line (dxc_compiler.cpp). A
+// translator built before it passed one would compile every pixel shader
+// with the level-0 fetch below and nobody would notice: stop it instead.
+#if !defined(XENOS_PIXEL_SHADER) && !defined(XENOS_VERTEX_SHADER)
+#error "shader_common.h needs a XenosRecomp built from the same source: it passes the shader's stage"
+#endif
+
+// A pixel shader's 2D fetch takes its level of detail from the screen-space
+// derivatives, as the console's does (every fetch in Burnout's pixel shaders
+// asks for the computed level, none sets one or biases it): the sampler's mip
+// filter, bias and anisotropy then mean something. Read at level 0 always, a
+// road seen along its length or a facade in the distance was its full-size
+// texture sampled every few texels - grain that crawled as soon as the camera
+// moved. A vertex shader has no derivatives and reads the base level.
+float4 tfetch2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset)
+{
+    Texture2DArray<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
+#ifdef XENOS_PIXEL_SHADER
+    return texture.Sample(g_SamplerDescriptorHeap[samplerDescriptorIndex], float3(texCoord + offset / getTexture2DDimensions(texture), g_ViewId));
+#else
+    return texture.SampleLevel(g_SamplerDescriptorHeap[samplerDescriptorIndex], float3(texCoord + offset / getTexture2DDimensions(texture), g_ViewId), 0.0);
+#endif
+}
+
+float4 tfetch2DArray(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float3 texCoord, float3 offset)
+{
+    Texture2DArray<float4> texture = g_Texture2DArrayDescriptorHeap[resourceDescriptorIndex];
+    uint3 dimensions = getTexture2DArrayDimensions(texture);
+    // A volume texture filters between its slices; an array picks one. Blend
+    // the two slices around the coordinate, texel-centred, as a 3D fetch does -
+    // a colour grading table read one slice at a time bands, and a sky's
+    // gradient shows it as its colour jumping.
+    float2 uv = texCoord.xy + offset.xy / dimensions.xy;
+    float layer = texCoord.z * dimensions.z - 0.5;
+    float base = floor(layer);
+    float t = layer - base;
+    float last = float(dimensions.z) - 1.0;
+    float4 a = texture.SampleLevel(g_SamplerDescriptorHeap[samplerDescriptorIndex], float3(uv, clamp(base, 0.0, last)), 0.0);
+    float4 b = texture.SampleLevel(g_SamplerDescriptorHeap[samplerDescriptorIndex], float3(uv, clamp(base + 1.0, 0.0, last)), 0.0);
+    return lerp(a, b, t);
+}
+
+float4 tfetchCube(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float3 texCoord)
+{
+    float3 dir = cubeDir(texCoord);
+    return g_TextureCubeDescriptorHeap[resourceDescriptorIndex].SampleLevel(
+        g_SamplerDescriptorHeap[samplerDescriptorIndex], dir, 0.0);
+}
+
+float2 getWeights2D(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset)
+{
+    Texture2DArray<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
+    return select(isnan(texCoord), 0.0, frac(texCoord * getTexture2DDimensions(texture) + offset - 0.5));
+}
+
+float3 getWeights2DArray(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float3 texCoord, float3 offset)
+{
+    Texture2DArray<float4> texture = g_Texture2DArrayDescriptorHeap[resourceDescriptorIndex];
+    return select(isnan(texCoord), 0.0, frac(texCoord * getTexture2DArrayDimensions(texture) + offset - 0.5));
+}
+
+#endif
+
+#ifdef __air__
+#define selectWrapper(a, b, c) select(c, b, a)
+#else
+#define selectWrapper(a, b, c) select(a, b, c)
+#endif
+
+#ifdef __air__
+#define frac(X) fract(X)
+
+template<typename T>
+void clip(T a)
+{
+    if (a < 0.0) {
+        discard_fragment();
+    }
+}
+
+template<typename T>
+float rcp(T a)
+{
+    return 1.0 / a;
+}
+
+template<typename T>
+float4x4 mul(T a, T b)
+{
+    return b * a;
+}
+#endif
+
+#ifdef __air__
+#define UNROLL
+#define BRANCH
+#else
+#define UNROLL [unroll]
+#define BRANCH [branch]
+#endif
+
+float w0(float a)
+{
+    return (1.0f / 6.0f) * (a * (a * (-a + 3.0f) - 3.0f) + 1.0f);
+}
+
+float w1(float a)
+{
+    return (1.0f / 6.0f) * (a * a * (3.0f * a - 6.0f) + 4.0f);
+}
+
+float w2(float a)
+{
+    return (1.0f / 6.0f) * (a * (a * (-3.0f * a + 3.0f) + 3.0f) + 1.0f);
+}
+
+float w3(float a)
+{
+    return (1.0f / 6.0f) * (a * a * a);
+}
+
+float g0(float a)
+{
+    return w0(a) + w1(a);
+}
+
+float g1(float a)
+{
+    return w2(a) + w3(a);
+}
+
+float h0(float a)
+{
+    return -1.0f + w1(a) / (w0(a) + w1(a)) + 0.5f;
+}
+
+float h1(float a)
+{
+    return 1.0f + w3(a) / (w2(a) + w3(a)) + 0.5f;
+}
+
+#ifdef __air__
+
+float4 tfetch2DBicubic(constant Texture2DDescriptorHeap* textureHeap,
+                       constant SamplerDescriptorHeap* samplerHeap,
+                       uint resourceDescriptorIndex,
+                       uint samplerDescriptorIndex,
+                       float2 texCoord, float2 offset)
+{
+    texture2d<float> texture = textureHeap[resourceDescriptorIndex].tex;
+    sampler sampler = samplerHeap[samplerDescriptorIndex].samp;
+    uint2 dimensions = getTexture2DDimensions(texture);
+
+    float x = texCoord.x * dimensions.x + offset.x;
+    float y = texCoord.y * dimensions.y + offset.y;
+
+    x -= 0.5f;
+    y -= 0.5f;
+    float px = floor(x);
+    float py = floor(y);
+    float fx = x - px;
+    float fy = y - py;
+
+    float g0x = g0(fx);
+    float g1x = g1(fx);
+    float h0x = h0(fx);
+    float h1x = h1(fx);
+    float h0y = h0(fy);
+    float h1y = h1(fy);
+
+    float4 r =
+        g0(fy) * (g0x * texture.sample(sampler, float2(px + h0x, py + h0y) / float2(dimensions)) +
+              g1x * texture.sample(sampler, float2(px + h1x, py + h0y) / float2(dimensions))) +
+        g1(fy) * (g0x * texture.sample(sampler, float2(px + h0x, py + h1y) / float2(dimensions)) +
+              g1x * texture.sample(sampler, float2(px + h1x, py + h1y) / float2(dimensions)));
+
+    return r;
+}
+
+#else
+
+float4 tfetch2DBicubic(uint resourceDescriptorIndex, uint samplerDescriptorIndex, float2 texCoord, float2 offset)
+{
+    Texture2DArray<float4> texture = g_Texture2DDescriptorHeap[resourceDescriptorIndex];
+    SamplerState samplerState = g_SamplerDescriptorHeap[samplerDescriptorIndex];
+    uint2 dimensions = getTexture2DDimensions(texture);
+    
+    float x = texCoord.x * dimensions.x + offset.x;
+    float y = texCoord.y * dimensions.y + offset.y;
+
+    x -= 0.5f;
+    y -= 0.5f;
+    float px = floor(x);
+    float py = floor(y);
+    float fx = x - px;
+    float fy = y - py;
+
+    float g0x = g0(fx);
+    float g1x = g1(fx);
+    float h0x = h0(fx);
+    float h1x = h1(fx);
+    float h0y = h0(fy);
+    float h1y = h1(fy);
+
+    float4 r =
+        g0(fy) * (g0x * texture.Sample(samplerState, float3(float2(px + h0x, py + h0y) / float2(dimensions), g_ViewId)) +
+            g1x * texture.Sample(samplerState, float3(float2(px + h1x, py + h0y) / float2(dimensions), g_ViewId))) +
+        g1(fy) * (g0x * texture.Sample(samplerState, float3(float2(px + h0x, py + h1y) / float2(dimensions), g_ViewId)) +
+            g1x * texture.Sample(samplerState, float3(float2(px + h1x, py + h1y) / float2(dimensions), g_ViewId)));
+
+    return r;
+}
+
+#endif
+
+float4 tfetchR11G11B10(uint4 value)
+{
+    if (g_SpecConstants() & SPEC_CONSTANT_R11G11B10_NORMAL)
+    {
+        return float4(
+            (value.x & 0x00000400 ? -1.0 : 0.0) + ((value.x & 0x3FF) / 1024.0),
+            (value.x & 0x00200000 ? -1.0 : 0.0) + (((value.x >> 11) & 0x3FF) / 1024.0),
+            (value.x & 0x80000000 ? -1.0 : 0.0) + (((value.x >> 22) & 0x1FF) / 512.0),
+            0.0);
+    }
+    else
+    {
+#ifdef __air__
+        return as_type<float4>(value);
+#else
+        return asfloat(value);
+#endif
+    }
+}
+
+float4 swapFloats(uint swappedFloats, float4 value, uint semanticIndex)
+{
+    // A select, not ?: - DXC turns a ternary over a vector into a branch and a
+    // phi, and the Adreno 5xx compiler (Redmi Note 7) lost every vertex of the
+    // shaders that call this: the cars vanished. 1u rather than 1ull keeps it
+    // off 64-bit integers, which those GPUs and old Mali lack.
+    const bool swapped = (swappedFloats & (1u << semanticIndex)) != 0;
+    return selectWrapper(bool4(swapped, swapped, swapped, swapped), value.yxwz, value);
+}
+
+float4 dst(float4 src0, float4 src1)
+{
+    float4 dest;
+    dest.x = 1.0;
+    dest.y = src0.y * src1.y;
+    dest.z = src0.z;
+    dest.w = src1.w;
+    return dest;
+}
+
+float4 max4(float4 src0)
+{
+    return max(max(src0.x, src0.y), max(src0.z, src0.w));
+}
+
+#ifdef __air__
+
+float2 getPixelCoord(constant Texture2DDescriptorHeap* textureHeap,
+                     uint resourceDescriptorIndex,
+                     float2 texCoord)
+{
+    texture2d<float> texture = textureHeap[resourceDescriptorIndex].tex;
+    return (float2)getTexture2DDimensions(texture) * texCoord;
+}
+
+#else
+
+float2 getPixelCoord(uint resourceDescriptorIndex, float2 texCoord)
+{
+    return getTexture2DDimensions(g_Texture2DDescriptorHeap[resourceDescriptorIndex]) * texCoord;
+}
+
+#endif
+
+float computeMipLevel(float2 pixelCoord)
+{
+#ifdef __air__
+    float2 dx = dfdx(pixelCoord);
+    float2 dy = dfdy(pixelCoord);
+#else
+    float2 dx = ddx(pixelCoord);
+    float2 dy = ddy(pixelCoord);
+#endif
+    float deltaMaxSqr = max(dot(dx, dx), dot(dy, dy));
+    return max(0.0, 0.5 * log2(deltaMaxSqr));
+}
+
+#ifdef __air__
+
+uint atomicLoadUint(device AtomicUintBuffer* buffer, uint index)
+{
+    return atomic_load_explicit(&buffer->buffer[index], memory_order_relaxed);
+}
+
+uint atomicFetchAddUint(device AtomicUintBuffer* buffer, uint index, uint value)
+{
+    return atomic_fetch_add_explicit(&buffer->buffer[index], value, memory_order_relaxed);
+}
+
+#else
+
+uint atomicLoadUint(RWStructuredBuffer<uint> buffer, uint index)
+{
+    return buffer[index];
+}
+
+uint atomicFetchAddUint(RWStructuredBuffer<uint> buffer, uint index, uint value)
+{
+    uint originalValue;
+    InterlockedAdd(buffer[index], value, originalValue);
+    return originalValue;
+}
+
+#endif
+
+#endif
+
+#endif

@@ -1,6 +1,13 @@
 #ifndef SHADER_COMMON_H_INCLUDED
 #define SHADER_COMMON_H_INCLUDED
 
+// Xerenge VR: the view of a multiview (stereo) draw; empty here, set by shader_common_stereo.h.
+#ifndef XERENGE_VIEW_ID_PARAM
+#define XERENGE_VIEW_ID_PARAM
+#define XERENGE_VIEW_ID_SET
+#define XERENGE_VIEW_POSITION(p)
+#endif
+
 #define SPEC_CONSTANT_R11G11B10_NORMAL  (1 << 0)
 #define SPEC_CONSTANT_ALPHA_TEST        (1 << 1)
 // Burnout without bloom: the composite's bloom term from the pixel itself.

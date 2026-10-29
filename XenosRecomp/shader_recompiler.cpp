@@ -2609,9 +2609,9 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
         out += "\tInterpolators input,\n";
 
         out += "#ifdef __spirv__\n";
-        out += "\tin bool iFace : SV_IsFrontFace\n";
+        out += "\tin bool iFace : SV_IsFrontFace XERENGE_VIEW_ID_PARAM\n";
         out += "#else\n";
-        out += "\tin uint iFace : SV_IsFrontFace\n";
+        out += "\tin uint iFace : SV_IsFrontFace XERENGE_VIEW_ID_PARAM\n";
         out += "#endif\n";
 
         out += "\n#endif\n";
@@ -2622,7 +2622,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
         out += "\tconstant PushConstants& g_PushConstants [[buffer(8)]],\n";
         out += "\tVertexShaderInput input [[stage_in]]\n";
         out += "#else\n";
-        out += "\tVertexShaderInput input\n";
+        out += "\tVertexShaderInput input XERENGE_VIEW_ID_PARAM\n";
         out += "#endif\n";
 
     #ifdef UNLEASHED_RECOMP
@@ -2645,6 +2645,8 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
 
     std::string outputName = isPixelShader ? "PixelShaderOutput" : "Interpolators";
 
+    // Xerenge VR: the view (multiview stereo; empty macros outside the stereo header).
+    out += "\tXERENGE_VIEW_ID_SET\n";
     out += "#ifdef __air__\n";
     println("\t{0} output = {0}{{}};", outputName);
     out += "#else\n";
@@ -3177,6 +3179,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
                 {
                     out += "\tif (g_ClipPlaneEnabled) output.clipDistance = dot(output.oPos, g_ClipPlane);\n";
                     out += "\toutput.oPos.xy += g_HalfPixelOffset * output.oPos.w;\n";
+                    out += "\tXERENGE_VIEW_POSITION(output.oPos);\n";
                 }
 
                 if (simpleControlFlow)

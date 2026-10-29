@@ -28,10 +28,12 @@ IDxcBlob* DxcCompiler::compile(const std::string& shaderSource, bool compilePixe
     }
     else
     {
+        // Xerenge VR: a multiview (stereo) shader reads its view (SV_ViewID), which needs shader model 6.1.
+        const bool view_id = compileSpirv && shaderSource.find("SV_ViewID") != std::string::npos;
         if (compilePixelShader)
-            target = L"-T ps_6_0";
+            target = view_id ? L"-T ps_6_1" : L"-T ps_6_0";
         else
-            target = L"-T vs_6_0";
+            target = view_id ? L"-T vs_6_1" : L"-T vs_6_0";
     }
 
     if (!compileLibrary)
