@@ -542,10 +542,12 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, bool bicu
         indent();
         println("float4 bloomValue = float4(saturate(saturate({} * (2.0 * gBloomParams.x) - gBloomParams.y) * "
                 "((gBloomParams.z * 0.816 + 0.184) / 0.9)), 0.0);", bloomScene);
-        // Xerenge VR: the bloom's strength - Off, Light, Medium in bits 7-8 blend 0, 0.25, 0.5 of the blurred bloom
+        // Xerenge VR: the bloom's strength - Off, Light, Medium in bits 7-8 blend 0, 0.5, 0.75 of the blurred bloom
         // over the in-place term; Full is the game's own (no SPEC_CONSTANT_BLOOM_IN_PLACE).
         indent();
-        println("float bloomBlend = float((g_SpecConstants() >> 7) & 3) * 0.25;");
+        println("uint bloomLevel = (g_SpecConstants() >> 7) & 3;");
+        indent();
+        println("float bloomBlend = bloomLevel == 0 ? 0.0 : 0.25 + float(bloomLevel) * 0.25;");
         indent();
         print("r{}.", instr.dstRegister);
         printDstSwizzle(instr.dstSwizzle, false);
