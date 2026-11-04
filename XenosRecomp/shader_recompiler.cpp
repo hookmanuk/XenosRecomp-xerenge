@@ -869,12 +869,10 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
                 break;
 
             case ExportRegister::VSPointSizeEdgeFlagKillVertex:
-                // Burnout's legacy VS metadata can use the combined
-                // point-size/edge/kill export slot. XenosRecomp has no
-                // separate output member for this packed slot; preserve the
-                // value through the position output so the instruction is
-                // still represented in generated HLSL.
-                exportRegister = "output.oPos";
+                // The packed point-size/edge/kill export: .x the point's size in guest pixels. Into its own variable,
+                // drawn as the point's size (oPointSize, SPIR-V). Through output.oPos, as before, it overwrote the
+                // position's x: Burnout's fire and smoke (point sprites) were drawn at garbage places, a pixel each.
+                exportRegister = "oPts";
                 break;
 
             default:
@@ -2572,6 +2570,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
         }
 
         out += "\tfloat clipDistance : SV_ClipDistance;\n";
+        // A point list's sprite size in host pixels (from the point-size export; 1 without it).
+        out += "#ifdef __spirv__\n";
+        out += "\t[[vk::builtin(\"PointSize\")]] float oPointSize : PSIZE;\n";
+        out += "#endif\n";
 
         out += "#endif\n";
     }
@@ -2593,6 +2595,15 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
         out += "[shader(\"vertex\")]\n";
 
     out += "#endif\n";
+
+    if (isPixelShader)
+    {
+        // The point sprite's coordinate (SPIR-V's PointCoord, built-in 16) for the register the hardware generates it
+        // in (paramGenRegister).
+        out += "#ifdef __spirv__\n";
+        out += "[[vk::ext_builtin_input(16)]] static const float2 gl_PointCoord;\n";
+        out += "#endif\n";
+    }
 
     println("{} shaderMain(", isPixelShader ? "PixelShaderOutput" : "Interpolators");
 
@@ -2750,6 +2761,9 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
     bool printedRegisters[32]{};
 
     uint32_t interpolatorCount = (shader->interpolatorInfo >> 5) & 0x1F;
+    // The register after the interpolators': where the hardware puts the generated parameters (param_gen) - zw a point
+    // sprite's coordinate (Burnout's fire and smoke sample their texture by abs(r.zw)).
+    uint32_t paramGenRegister = 0;
 
     for (uint32_t i = 0; i < interpolatorCount; i++)
     {
@@ -2765,6 +2779,7 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
             println("\t{} r{} = input.i{};", IsHalfRegister(interpolator.reg) ? "min16float4" : "float4",
                 uint32_t(interpolator.reg), shaderInterpolatorNames[i]);
             printedRegisters[interpolator.reg] = true;
+            paramGenRegister = std::max(paramGenRegister, uint32_t(interpolator.reg) + 1);
         }
         else
         {
@@ -2796,6 +2811,10 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
             {
                 out += "float4((input.iPos.xy - 0.5) * float2(iFace ? 1.0 : -1.0, 1.0), 0.0, 0.0);\n";
             }
+            else if (isPixelShader && i == paramGenRegister && interpolatorCount != 0)
+            {
+                out += "\n#ifdef __spirv__\n\t\tfloat4(0.0, 0.0, gl_PointCoord);\n#else\n\t\t0.0;\n#endif\n";
+            }
             else if (!isPixelShader && guestIndexInput && i == 0)
             {
                 out += "float4(input.iGuestIndex.x, 0.0, 0.0, 0.0);\n";
@@ -2817,6 +2836,8 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
     out += "\tint aL = 0;\n";
     out += "\tbool p0 = false;\n";
     out += "\tfloat ps = 0.0;\n";
+    if (!isPixelShader)
+        out += "\tfloat4 oPts = 0.0;\n";  // the point-size export (see oPointSize)
     if (isPixelShader)
     {
 #ifdef UNLEASHED_RECOMP
@@ -3186,6 +3207,9 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
                 else
                 {
                     out += "\tif (g_ClipPlaneEnabled) output.clipDistance = dot(output.oPos, g_ClipPlane);\n";
+                    out += "#ifdef __spirv__\n";
+                    out += "\toutput.oPointSize = max(oPts.x * XENOS_POINT_SCALE, 1.0);\n";
+                    out += "#endif\n";
                     out += "\toutput.oPos.xy += g_HalfPixelOffset * output.oPos.w;\n";
                     out += "\tXERENGE_VIEW_POSITION(output.oPos);\n";
                 }

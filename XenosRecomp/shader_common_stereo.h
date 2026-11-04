@@ -79,6 +79,8 @@ uint XenosComponent(uint4 v, uint c)
 #define g_AlphaThreshold            asfloat(XENOS_SHARED_UINT(308))
 #define g_conditionalSurveyIndex    XENOS_SHARED_UINT(312)
 #define g_conditionalRenderingIndex XENOS_SHARED_UINT(316)
+// Host pixels to a guest pixel (shared byte 328; 0 before the renderer sets it): a point sprite's size.
+#define XENOS_POINT_SCALE           (asfloat(XENOS_SHARED_UINT(328)) > 0.0 ? asfloat(XENOS_SHARED_UINT(328)) : 1.0)
 
 [[vk::constant_id(0)]] const uint g_SpecConstants = 0;
 
