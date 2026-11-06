@@ -7,12 +7,29 @@ s = open(P, 'rb').read().decode('utf-8')
 nl = '\r\n' if '\r\n' in s else '\n'
 head = '#define SHADER_COMMON_H_INCLUDED' + nl
 assert s.count(head) == 1
-defaults = (nl + '// Xerenge VR: the view of a multiview (stereo) draw; empty here, set by shader_common_stereo.h.' + nl +
+old_defaults = (nl + '// Xerenge VR: the view of a multiview (stereo) draw; empty here, set by shader_common_stereo.h.' + nl +
+                '#ifndef XERENGE_VIEW_ID_PARAM' + nl + '#define XERENGE_VIEW_ID_PARAM' + nl + '#define XERENGE_VIEW_ID_SET' + nl +
+                '#define XERENGE_VIEW_POSITION(p)' + nl + '#endif' + nl)
+# Screen-space draws (the viewport transform off: PA_CL_VTE_CNTL's scale and offset bits clear): the position is in the
+# target's pixels and z goes to the depth buffer as it is. The renderer sets shared byte 336 for them, with the pixels'
+# scale and offset into clip space (340-352) and z's (356, 360). Burnout's billboard smoke, glass, debris and explosion
+# smoke are drawn so (sub_8214C118: pixels, z = 0.5 / distance): taken as clip space they all fell off the screen.
+screen = ('#define XERENGE_SCREEN_TO_CLIP(p) (p).xy = (p).xy * asfloat(uint2(XENOS_SHARED_UINT(340), '
+          'XENOS_SHARED_UINT(344))) + asfloat(uint2(XENOS_SHARED_UINT(348), XENOS_SHARED_UINT(352))) * (p).w; '
+          '(p).z = (p).z * asfloat(XENOS_SHARED_UINT(356)) + asfloat(XENOS_SHARED_UINT(360)) * (p).w;')
+defaults = (nl + '// Xerenge: screen-space draws into clip space (shared bytes 336-360, set by the renderer).' + nl + screen +
+            nl + '// Xerenge VR: the view of a multiview (stereo) draw; empty here, set by shader_common_stereo.h.' + nl +
             '#ifndef XERENGE_VIEW_ID_PARAM' + nl + '#define XERENGE_VIEW_ID_PARAM' + nl + '#define XERENGE_VIEW_ID_SET' + nl +
-            '#define XERENGE_VIEW_POSITION(p)' + nl + '#endif' + nl)
-if 'XERENGE_VIEW_ID_PARAM' not in s:
+            '#ifdef __spirv__' + nl +
+            '#define XERENGE_VIEW_POSITION(p) if (XENOS_SHARED_UINT(336) != 0) { XERENGE_SCREEN_TO_CLIP(p) }' + nl +
+            '#else' + nl + '#define XERENGE_VIEW_POSITION(p)' + nl + '#endif' + nl + '#endif' + nl)
+if old_defaults in s:
+    s = s.replace(old_defaults, defaults)
+    open(P, 'wb').write(s.encode('utf-8'))
+elif 'XERENGE_VIEW_ID_PARAM' not in s:
     s = s.replace(head, head + defaults)
     open(P, 'wb').write(s.encode('utf-8'))
+assert defaults in s
 
 t = s
 prelude = nl.join([
@@ -27,12 +44,18 @@ prelude = nl.join([
     '#define XERENGE_VIEW_ID_PARAM , in uint iViewId : SV_ViewID',
     '#define XERENGE_VIEW_ID_SET g_ViewId = iViewId;',
     '#define XERENGE_EYE_SHIFT (g_ViewId != 0 ? asfloat(XENOS_SHARED_UINT(324)) : asfloat(XENOS_SHARED_UINT(320)))',
+    '// Screen-space draws (shared byte 336) into clip space, each eye shifted by its clip shift times the draw\'s',
+    '// depth per unit of z (shared byte 332: Burnout\'s z is 0.5 / distance, so 2); other geometry at w 1 (the',
+    '// interface) stays put; perspective geometry moves by the clip shift.',
+    '#define XERENGE_VIEW_POSITION(p) if (XENOS_SHARED_UINT(336) != 0) { float xerengeZ = (p).z; \\',
+    '    XERENGE_SCREEN_TO_CLIP(p) (p).x += XERENGE_EYE_SHIFT * asfloat(XENOS_SHARED_UINT(332)) * xerengeZ * (p).w; } \\',
+    '    else if (abs((p).w - 1.0) > (1.0 / 1024.0)) (p).x += XERENGE_EYE_SHIFT;',
     '#else',
     '#define XERENGE_VIEW_ID_PARAM',
     '#define XERENGE_VIEW_ID_SET',
     '#define XERENGE_EYE_SHIFT 0.0',
+    '#define XERENGE_VIEW_POSITION(p)',
     '#endif',
-    '#define XERENGE_VIEW_POSITION(p) if (abs((p).w - 1.0) > (1.0 / 1024.0)) (p).x += XERENGE_EYE_SHIFT;',
     ''])
 t = t.replace(head, head + prelude)
 

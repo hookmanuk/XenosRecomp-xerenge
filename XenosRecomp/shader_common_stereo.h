@@ -11,18 +11,30 @@ static uint g_ViewId = 0;
 #define XERENGE_VIEW_ID_PARAM , in uint iViewId : SV_ViewID
 #define XERENGE_VIEW_ID_SET g_ViewId = iViewId;
 #define XERENGE_EYE_SHIFT (g_ViewId != 0 ? asfloat(XENOS_SHARED_UINT(324)) : asfloat(XENOS_SHARED_UINT(320)))
+// Screen-space draws (shared byte 336) into clip space, each eye shifted by its clip shift times the draw's
+// depth per unit of z (shared byte 332: Burnout's z is 0.5 / distance, so 2); other geometry at w 1 (the
+// interface) stays put; perspective geometry moves by the clip shift.
+#define XERENGE_VIEW_POSITION(p) if (XENOS_SHARED_UINT(336) != 0) { float xerengeZ = (p).z; \
+    XERENGE_SCREEN_TO_CLIP(p) (p).x += XERENGE_EYE_SHIFT * asfloat(XENOS_SHARED_UINT(332)) * xerengeZ * (p).w; } \
+    else if (abs((p).w - 1.0) > (1.0 / 1024.0)) (p).x += XERENGE_EYE_SHIFT;
 #else
 #define XERENGE_VIEW_ID_PARAM
 #define XERENGE_VIEW_ID_SET
 #define XERENGE_EYE_SHIFT 0.0
+#define XERENGE_VIEW_POSITION(p)
 #endif
-#define XERENGE_VIEW_POSITION(p) if (abs((p).w - 1.0) > (1.0 / 1024.0)) (p).x += XERENGE_EYE_SHIFT;
 
+// Xerenge: screen-space draws into clip space (shared bytes 336-360, set by the renderer).
+#define XERENGE_SCREEN_TO_CLIP(p) (p).xy = (p).xy * asfloat(uint2(XENOS_SHARED_UINT(340), XENOS_SHARED_UINT(344))) + asfloat(uint2(XENOS_SHARED_UINT(348), XENOS_SHARED_UINT(352))) * (p).w; (p).z = (p).z * asfloat(XENOS_SHARED_UINT(356)) + asfloat(XENOS_SHARED_UINT(360)) * (p).w;
 // Xerenge VR: the view of a multiview (stereo) draw; empty here, set by shader_common_stereo.h.
 #ifndef XERENGE_VIEW_ID_PARAM
 #define XERENGE_VIEW_ID_PARAM
 #define XERENGE_VIEW_ID_SET
+#ifdef __spirv__
+#define XERENGE_VIEW_POSITION(p) if (XENOS_SHARED_UINT(336) != 0) { XERENGE_SCREEN_TO_CLIP(p) }
+#else
 #define XERENGE_VIEW_POSITION(p)
+#endif
 #endif
 
 #define SPEC_CONSTANT_R11G11B10_NORMAL  (1 << 0)

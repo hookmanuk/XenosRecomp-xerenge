@@ -1,11 +1,17 @@
 #ifndef SHADER_COMMON_H_INCLUDED
 #define SHADER_COMMON_H_INCLUDED
 
+// Xerenge: screen-space draws into clip space (shared bytes 336-360, set by the renderer).
+#define XERENGE_SCREEN_TO_CLIP(p) (p).xy = (p).xy * asfloat(uint2(XENOS_SHARED_UINT(340), XENOS_SHARED_UINT(344))) + asfloat(uint2(XENOS_SHARED_UINT(348), XENOS_SHARED_UINT(352))) * (p).w; (p).z = (p).z * asfloat(XENOS_SHARED_UINT(356)) + asfloat(XENOS_SHARED_UINT(360)) * (p).w;
 // Xerenge VR: the view of a multiview (stereo) draw; empty here, set by shader_common_stereo.h.
 #ifndef XERENGE_VIEW_ID_PARAM
 #define XERENGE_VIEW_ID_PARAM
 #define XERENGE_VIEW_ID_SET
+#ifdef __spirv__
+#define XERENGE_VIEW_POSITION(p) if (XENOS_SHARED_UINT(336) != 0) { XERENGE_SCREEN_TO_CLIP(p) }
+#else
 #define XERENGE_VIEW_POSITION(p)
+#endif
 #endif
 
 #define SPEC_CONSTANT_R11G11B10_NORMAL  (1 << 0)
